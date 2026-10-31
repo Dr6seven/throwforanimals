@@ -24,7 +24,7 @@ local FOOD_EVERY = 15      -- detik, jeda Auto Buy dan Equip Food
 local FOOD_MAX = 120       -- batas atas indeks makanan
 local THROW_ACCURACY = 1   -- 1 = bar lempar paling atas
 local THROW_EXTRA = 0.3    -- tambahan setelah waktu terbang
-local SCRIPT_URL = "https://raw.githubusercontent.com/Dr6seven/throwfood/refs/heads/main/throwfood.lua"
+local SCRIPT_URL = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/script.lua"
 local CONFIG_FILE = "ThrowForAnimals_config.json"
 local AUTOLOAD_FILE = "ThrowForAnimals_autoload.txt"
 local CONFIG_KEYS = { "AutoTrain", "AutoTap", "AutoThrow", "AutoEquip", "AutoSell", "AutoBar",
