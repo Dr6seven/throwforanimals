@@ -1,4 +1,4 @@
--- THROW FOOD [BETA] | By D33RZN
+-- Throw For Animals [BETA] | by D33RZN
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TweenService")
@@ -9,9 +9,11 @@ local R = RS:WaitForChild("Remotes")
 
 -- ===== SETTING =====
 local RETRY = 3            -- jeda kalau Start ditolak
-local SILENT_LIMIT = 20    -- detik tanpa bonus = anggap latihan berhenti
+local SILENT_LIMIT = 20    -- detik tanpa bonus = cek ulang latihan
 local TAP_DELAY = 0.15     -- jangan lebih dari 0.4
 local TP_HEIGHT = 3.5      -- tinggi teleport di atas lingkaran
+local EQUIP_EVERY = 30     -- detik, jeda Auto Equip Best
+local SELL_EVERY = 60      -- detik, jeda Auto Sell (jangan di bawah 5)
 
 -- bersihkan versi lama
 getgenv().AUTO_TRAIN = false
@@ -31,7 +33,7 @@ local C_GRAY = Color3.fromRGB(150, 150, 160)
 local C_WARN = Color3.fromRGB(240, 170, 60)
 local C_GOOD = Color3.fromRGB(90, 200, 120)
 
-local State = { AutoTrain = false, AutoTap = true }
+local State = { AutoTrain = false, AutoTap = true, AutoEquip = false, AutoSell = false }
 local taps, extra, lastId = 0, 0, 0
 local running = false
 local lastEvent = os.clock()
@@ -79,10 +81,10 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(0, 0, 0, 16)
 title.AutomaticSize = Enum.AutomaticSize.X
 title.BackgroundTransparency = 1
-title.Text = "THROW FOOD [BETA]"
+title.Text = "Throw For Animals [BETA]"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.Font = Enum.Font.GothamBold
-title.TextSize = 13
+title.TextSize = 12
 title.LayoutOrder = 1
 title.Parent = titleBox
 
@@ -90,7 +92,7 @@ local credit = Instance.new("TextLabel")
 credit.Size = UDim2.new(0, 0, 0, 10)
 credit.AutomaticSize = Enum.AutomaticSize.X
 credit.BackgroundTransparency = 1
-credit.Text = "By D33RZN"
+credit.Text = "by D33RZN"
 credit.TextColor3 = C_GRAY
 credit.Font = Enum.Font.Gotham
 credit.TextSize = 7
@@ -577,32 +579,37 @@ getgenv().__TapConn = R.Training_Bonus.OnClientEvent:Connect(function(...)
     end)
 end)
 
--- Auto Training (teleport ke lingkaran, Start, mulai ulang kalau berhenti)
+-- Auto Training (Start, teleport kalau TooFar, Busy = sudah latihan)
 local function trainLoop()
     running = true
     local started = false
     while alive() do
         if started and os.clock() - lastEvent > SILENT_LIMIT then
             started = false
-            setStatus("Bonus berhenti, mulai ulang latihan...", C_WARN)
+            setStatus("Bonus berhenti, cek ulang latihan...", C_WARN)
         end
 
         if not started then
-            if tpToTraining() then
-                setStatus("Teleport ke lingkaran latihan...", C_GRAY)
-                task.wait(0.5)
-            end
-
             local okS, res = pcall(function() return R.Training_Start:InvokeServer() end)
+            local reason = (okS and typeof(res) == "table" and res.Ok == false) and tostring(res.Reason) or nil
+
             if not okS then
                 setStatus("Start error", C_WARN)
                 task.wait(RETRY)
-            elseif typeof(res) == "table" and res.Ok == false then
-                if tostring(res.Reason) == "TooFar" and not getTrainSpot() then
-                    setStatus("Lingkaran latihan tidak ditemukan", C_WARN)
+            elseif reason == "Busy" then
+                started = true
+                lastEvent = os.clock()
+                setStatus("Latihan sudah aktif (Busy)", C_GOOD)
+            elseif reason == "TooFar" then
+                if tpToTraining() then
+                    setStatus("Teleport ke lingkaran latihan...", C_GRAY)
+                    task.wait(0.6)
                 else
-                    setStatus("Start ditolak: " .. tostring(res.Reason), C_WARN)
+                    setStatus("Lingkaran latihan tidak ditemukan", C_WARN)
+                    task.wait(RETRY)
                 end
+            elseif reason then
+                setStatus("Start ditolak: " .. reason, C_WARN)
                 task.wait(RETRY)
             else
                 started = true
@@ -634,12 +641,59 @@ local function setTrain(on)
     end
 end
 
+-- Auto Equip Best dan Auto Sell (tanpa argumen, diulang tiap beberapa detik)
+local loops = {}
+
+local function summarize(res)
+    if typeof(res) ~= "table" then return tostring(res) end
+    local p = {}
+    for k, v in pairs(res) do p[#p + 1] = tostring(k) .. "=" .. tostring(v) end
+    local s = table.concat(p, ", ")
+    return #s > 90 and s:sub(1, 90) .. "..." or s
+end
+
+local function callOnce(remoteName, label)
+    local okC, res = pcall(function() return R[remoteName]:InvokeServer() end)
+    if not okC then
+        setStatus(label .. ": error", C_WARN)
+    elseif typeof(res) == "table" and res.Ok == false then
+        setStatus(label .. ": " .. tostring(res.Reason), C_WARN)
+    else
+        setStatus(label .. ": " .. summarize(res), C_GOOD)
+    end
+end
+
+local function startLoop(key, remoteName, interval, label)
+    if loops[key] then return end
+    loops[key] = true
+    task.spawn(function()
+        while State[key] and getgenv().__ThrowToken == myToken do
+            callOnce(remoteName, label)
+            local t0 = os.clock()
+            while State[key] and getgenv().__ThrowToken == myToken and os.clock() - t0 < interval do
+                task.wait(0.5)
+            end
+        end
+        loops[key] = false
+    end)
+end
+
 -- ===== ISI HALAMAN =====
 local s1 = section(mainPage, "auto training latihan")
-switchRow(s1, "Auto Training", "Teleport ke lingkaran latihan, mulai otomatis, dan mulai ulang kalau berhenti", "AutoTrain", setTrain)
+switchRow(s1, "Auto Training", "Teleport ke lingkaran latihan kalau perlu, mulai otomatis, dan cek ulang kalau berhenti", "AutoTrain", setTrain)
 
 local s2 = section(mainPage, "auto tap bonus")
 switchRow(s2, "Auto Tap Bonus", "Tap bonus latihan otomatis (nyala sendiri, bisa dipakai bareng latihan manual)", "AutoTap")
+
+local s5 = section(mainPage, "auto equip best hewan")
+switchRow(s5, "Auto Equip Best", "Pasang hewan terbaik otomatis tiap 30 detik", "AutoEquip", function(on)
+    if on then startLoop("AutoEquip", "Plot_EquipBest", EQUIP_EVERY, "Equip Best") end
+end)
+
+local s6 = section(mainPage, "auto sell jual")
+switchRow(s6, "Auto Sell", "Jual hewan kecil tiap 60 detik (hewan di kandang aman)", "AutoSell", function(on)
+    if on then startLoop("AutoSell", "Plot_SellAll", SELL_EVERY, "Sell All") end
+end)
 
 local s3 = section(mainPage, "statistik tap")
 statsLbl = infoRow(s3, "Tap: 0  |  Extra Reps: 0  |  ID: 0")
@@ -653,6 +707,16 @@ buttonRow(m1, "Teleport ke Lingkaran", "Pindah ke lingkaran latihan sekarang", f
     else
         setStatus("Lingkaran latihan tidak ditemukan", C_WARN)
     end
+end)
+
+local m4 = section(miscPage, "equip best sekarang")
+buttonRow(m4, "Equip Best Sekarang", "Pasang hewan terbaik sekali", function()
+    task.spawn(callOnce, "Plot_EquipBest", "Equip Best")
+end)
+
+local m5 = section(miscPage, "sell all sekarang jual")
+buttonRow(m5, "Sell All Sekarang", "Jual hewan kecil sekali", function()
+    task.spawn(callOnce, "Plot_SellAll", "Sell All")
 end)
 
 local m2 = section(miscPage, "stop latihan")
@@ -674,6 +738,8 @@ yesBtn.MouseButton1Click:Connect(function()
     local was = State.AutoTrain
     State.AutoTrain = false
     State.AutoTap = false
+    State.AutoEquip = false
+    State.AutoSell = false
     getgenv().__ThrowToken = (getgenv().__ThrowToken or 0) + 1
     if getgenv().__TapConn then pcall(function() getgenv().__TapConn:Disconnect() end) end
     if was then task.spawn(function() task.wait(1.2); stopTraining() end) end
