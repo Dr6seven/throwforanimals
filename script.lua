@@ -8,16 +8,20 @@ local lp = Players.LocalPlayer
 local R = RS:WaitForChild("Remotes")
 
 -- ===== SETTING =====
-local RETRY = 3            -- jeda kalau Start ditolak
+local RETRY = 3            -- jeda kalau Start latihan ditolak
 local SILENT_LIMIT = 20    -- detik tanpa bonus = cek ulang latihan
 local TAP_DELAY = 0.15     -- jangan lebih dari 0.4
-local TP_HEIGHT = 3.5      -- tinggi teleport di atas lingkaran
+local TP_HEIGHT = 3.5      -- tinggi teleport di atas lingkaran latihan
+local LINE_HEIGHT = 3      -- tinggi teleport di atas garis lempar
 local EQUIP_EVERY = 30     -- detik, jeda Auto Equip Best
 local SELL_EVERY = 60      -- detik, jeda Auto Sell (jangan di bawah 5)
+local THROW_ACCURACY = 1   -- 1 = bar lempar paling atas
+local THROW_EXTRA = 0.3    -- tambahan setelah waktu terbang
 
 -- bersihkan versi lama
 getgenv().AUTO_TRAIN = false
 getgenv().AUTO_TAP = false
+getgenv().THROW_POS = nil
 if getgenv().__TapConn then pcall(function() getgenv().__TapConn:Disconnect() end) end
 if getgenv().ThrowUI then pcall(function() getgenv().ThrowUI:Destroy() end) end
 local myToken = (getgenv().__ThrowToken or 0) + 1
@@ -33,9 +37,11 @@ local C_GRAY = Color3.fromRGB(150, 150, 160)
 local C_WARN = Color3.fromRGB(240, 170, 60)
 local C_GOOD = Color3.fromRGB(90, 200, 120)
 
-local State = { AutoTrain = false, AutoTap = true, AutoEquip = false, AutoSell = false }
+local State = { AutoTrain = false, AutoTap = true, AutoEquip = false, AutoSell = false, AutoThrow = false }
 local taps, extra, lastId = 0, 0, 0
 local running = false
+local throwing = false
+local throws = 0
 local lastEvent = os.clock()
 
 local function corner(inst, r) Instance.new("UICorner", inst).CornerRadius = UDim.new(0, r) end
@@ -275,7 +281,7 @@ tabList.Size = UDim2.new(1, 0, 1, -30)
 tabList.BackgroundTransparency = 1
 tabList.Parent = sidebar
 local tl = Instance.new("UIListLayout", tabList)
-tl.Padding = UDim.new(0, 4)
+tl.Padding = UDim.new(0, 3)
 tl.SortOrder = Enum.SortOrder.LayoutOrder
 local tp = Instance.new("UIPadding", tabList)
 tp.PaddingTop = UDim.new(0, 8)
@@ -339,15 +345,15 @@ end
 
 local function newTab(name, order, icon)
     local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1, 0, 0, 30)
+    b.Size = UDim2.new(1, 0, 0, 28)
     b.Text = name
     b.Font = Enum.Font.GothamBold
-    b.TextSize = 12
+    b.TextSize = 11
     b.TextXAlignment = Enum.TextXAlignment.Left
     b.LayoutOrder = order
     b.Parent = tabList
     corner(b, 8)
-    Instance.new("UIPadding", b).PaddingLeft = UDim.new(0, 32)
+    Instance.new("UIPadding", b).PaddingLeft = UDim.new(0, 28)
     local ic = Instance.new("TextLabel")
     ic.Size = UDim2.new(0, 24, 1, 0)
     ic.Position = UDim2.new(0, -26, 0, 0)
@@ -362,9 +368,17 @@ local function newTab(name, order, icon)
 end
 
 local mainPage = newPage("Main")
+local throwPage = newPage("Throw")
+local trainPage = newPage("Training")
+local sellPage = newPage("Sell")
+local petPage = newPage("Pet")
 local miscPage = newPage("Misc")
 newTab("Main", 1, "🏠")
-newTab("Misc", 2, "⚙")
+newTab("Throw", 2, "🎯")
+newTab("Training", 3, "💪")
+newTab("Sell", 4, "💰")
+newTab("Pet", 5, "🐾")
+newTab("Misc", 6, "⚙")
 
 -- ===== KOMPONEN =====
 local sections = {}
@@ -444,6 +458,8 @@ local function updateStats()
     end
 end
 
+local switchRefresh = {}
+
 local function switchRow(parent, text, desc, key, onChange)
     local row = Instance.new("TextButton")
     row.Size = UDim2.new(1, 0, 0, 0)
@@ -481,6 +497,7 @@ local function switchRow(parent, text, desc, key, onChange)
             knob.Position = pos
         end
     end
+    switchRefresh[key] = refresh
     row.MouseButton1Click:Connect(function()
         State[key] = not State[key]
         refresh(true)
@@ -530,11 +547,36 @@ local function infoRow(parent, initial)
     return lbl
 end
 
--- ===== LOGIKA =====
+-- ===== LOGIKA UMUM =====
 local function getHRP()
     return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
 end
 
+-- matikan switch dari kode (switch ikut geser ke OFF)
+local function forceOff(key)
+    State[key] = false
+    if switchRefresh[key] then switchRefresh[key](true) end
+end
+
+local function restoreLook()
+    pcall(function() R.Throw_Cancel:InvokeServer() end)
+    local char = lp.Character
+    if char then
+        for _, v in ipairs(char:GetDescendants()) do
+            if v:IsA("BasePart") then
+                if v.Name ~= "HumanoidRootPart" then v.Transparency = 0 end
+                v.LocalTransparencyModifier = 0
+            elseif v:IsA("Decal") then
+                v.Transparency = 0
+            end
+        end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then workspace.CurrentCamera.CameraSubject = hum end
+    end
+    workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+end
+
+-- ===== TRAINING =====
 -- lingkaran latihan ada di plot milik sendiri (posisinya beda tiap server)
 local function getTrainSpot()
     local props = workspace:FindFirstChild("LocalPlotProps")
@@ -628,6 +670,11 @@ end
 
 local function setTrain(on)
     if on then
+        if State.AutoThrow then
+            forceOff("AutoTrain")
+            setStatus("Auto Throw lagi nyala, Auto Training dibatalkan", C_WARN)
+            return
+        end
         if running then return end
         task.spawn(trainLoop)
     else
@@ -641,7 +688,7 @@ local function setTrain(on)
     end
 end
 
--- Auto Equip Best dan Auto Sell (tanpa argumen, diulang tiap beberapa detik)
+-- ===== EQUIP BEST & SELL (tanpa argumen, diulang tiap beberapa detik) =====
 local loops = {}
 
 local function summarize(res)
@@ -678,30 +725,178 @@ local function startLoop(key, remoteName, interval, label)
     end)
 end
 
+-- ===== AUTO THROW =====
+-- garis lempar global: Workspace.StarterArea.CrossLine
+local function getThrowLine()
+    local area = workspace:FindFirstChild("StarterArea")
+    return area and area:FindFirstChild("CrossLine")
+end
+
+local function tpToThrow()
+    local h = getHRP()
+    if not h then return false end
+
+    local line = getThrowLine()
+    if line and line:IsA("BasePart") then
+        local p = line.Position
+        h.CFrame = CFrame.new(p.X, p.Y + LINE_HEIGHT, p.Z)
+        return true
+    end
+
+    -- cadangan: posisi yang tersimpan
+    local pos = getgenv().THROW_POS
+    if pos then
+        h.CFrame = CFrame.new(pos + Vector3.new(0, 0.5, 0))
+        return true
+    end
+    return false
+end
+
+local function doThrow()
+    local s = R.Throw_Start:InvokeServer()
+    if typeof(s) ~= "table" then
+        setStatus("Start: balasan tidak dikenal", C_WARN)
+        task.wait(2)
+        return
+    end
+
+    if not s.Ok then
+        local why = tostring(s.Reason)
+        if why == "TooFar" then
+            if tpToThrow() then
+                setStatus("TooFar, balik ke garis lempar...", C_GRAY)
+                task.wait(0.6)
+            else
+                setStatus("TooFar: posisi lempar tidak ditemukan", C_WARN)
+                task.wait(2)
+            end
+        elseif why == "Busy" then
+            setStatus("Busy, reset sesi lempar", C_WARN)
+            pcall(function() R.Throw_Complete:InvokeServer() end)
+            task.wait(0.5)
+            pcall(function() R.Throw_Cancel:InvokeServer() end)
+            task.wait(1)
+        elseif why == "Cooldown" then
+            task.wait(0.5)
+        else
+            setStatus("Start ditolak: " .. why, C_WARN)
+            task.wait(2)
+        end
+        return
+    end
+
+    -- Start berhasil = posisi ini valid, simpan sebagai cadangan
+    if not getgenv().THROW_POS then
+        local h = getHRP()
+        if h then getgenv().THROW_POS = h.Position end
+    end
+
+    local r = R.Throw_Resolve:InvokeServer(THROW_ACCURACY)
+    if typeof(r) ~= "table" or not r.Ok then
+        setStatus("Resolve gagal", C_WARN)
+        pcall(function() R.Throw_Cancel:InvokeServer() end)
+        task.wait(2)
+        return
+    end
+
+    throws += 1
+    setStatus(("Lempar #%d: %s (%s)"):format(throws, tostring(r.DisplayName), tostring(r.Rarity)), C_GOOD)
+
+    task.wait((tonumber(r.FlightTime) or 6) + THROW_EXTRA)
+
+    local done = false
+    task.spawn(function()
+        pcall(function() R.Throw_Complete:InvokeServer() end)
+        done = true
+    end)
+    local t0 = os.clock()
+    while not done and os.clock() - t0 < 3 do task.wait(0.1) end
+
+    task.wait(0.5)
+    tpToThrow()   -- karakter dipindah game ke kandang, balik ke garis lempar
+end
+
+local function throwLoop()
+    throwing = true
+    if tpToThrow() then
+        setStatus("Teleport ke garis lempar...", C_GRAY)
+        task.wait(0.5)
+    end
+    while State.AutoThrow and getgenv().__ThrowToken == myToken do
+        local okT, err = pcall(doThrow)
+        if not okT then
+            setStatus("Error: " .. tostring(err), C_WARN)
+            task.wait(2)
+        end
+        task.wait(0.2)
+    end
+    throwing = false
+end
+
+local function setThrow(on)
+    if on then
+        if State.AutoTrain then
+            forceOff("AutoThrow")
+            setStatus("Auto Training lagi nyala, Auto Throw dibatalkan", C_WARN)
+            return
+        end
+        if throwing then return end
+        task.spawn(throwLoop)
+    else
+        setStatus("Menghentikan lempar...", C_GRAY)
+        task.spawn(function()
+            local t0 = os.clock()
+            while throwing and os.clock() - t0 < 12 do task.wait(0.2) end
+            restoreLook()
+            setStatus("Lempar berhenti", C_GRAY)
+        end)
+    end
+end
+
 -- ===== ISI HALAMAN =====
-local s1 = section(mainPage, "auto training latihan")
-switchRow(s1, "Auto Training", "Teleport ke lingkaran latihan kalau perlu, mulai otomatis, dan cek ulang kalau berhenti", "AutoTrain", setTrain)
+-- MAIN
+local a1 = section(mainPage, "status")
+statusLbl = infoRow(a1, "Siap")
 
-local s2 = section(mainPage, "auto tap bonus")
-switchRow(s2, "Auto Tap Bonus", "Tap bonus latihan otomatis (nyala sendiri, bisa dipakai bareng latihan manual)", "AutoTap")
+local a2 = section(mainPage, "statistik tap")
+statsLbl = infoRow(a2, "Tap: 0  |  Extra Reps: 0  |  ID: 0")
 
-local s5 = section(mainPage, "auto equip best hewan")
-switchRow(s5, "Auto Equip Best", "Pasang hewan terbaik otomatis tiap 30 detik", "AutoEquip", function(on)
-    if on then startLoop("AutoEquip", "Plot_EquipBest", EQUIP_EVERY, "Equip Best") end
+local a3 = section(mainPage, "info")
+infoRow(a3, "Auto Throw dan Auto Training tidak bisa nyala bareng. Yang dinyalakan paling akhir otomatis mati.")
+
+-- THROW
+local t1 = section(throwPage, "auto throw lempar makanan")
+switchRow(t1, "Auto Throw", "Lempar makanan otomatis (bar paling atas)", "AutoThrow", setThrow)
+
+local t2 = section(throwPage, "teleport posisi garis lempar")
+buttonRow(t2, "Teleport ke Garis Lempar", "Pindah ke garis lempar sekarang", function()
+    if tpToThrow() then
+        setStatus("Teleport ke garis lempar", C_GOOD)
+    else
+        setStatus("Garis lempar tidak ditemukan", C_WARN)
+    end
 end)
 
-local s6 = section(mainPage, "auto sell jual")
-switchRow(s6, "Auto Sell", "Jual hewan kecil tiap 60 detik (hewan di kandang aman)", "AutoSell", function(on)
-    if on then startLoop("AutoSell", "Plot_SellAll", SELL_EVERY, "Sell All") end
+local t3 = section(throwPage, "simpan posisi lempar")
+buttonRow(t3, "Simpan Posisi Lempar", "Cadangan kalau garis lempar tidak ketemu", function()
+    local h = getHRP()
+    if h then
+        getgenv().THROW_POS = h.Position
+        setStatus("Posisi lempar disimpan", C_GOOD)
+    else
+        setStatus("Karakter tidak ditemukan", C_WARN)
+    end
 end)
 
-local s3 = section(mainPage, "statistik tap")
-statsLbl = infoRow(s3, "Tap: 0  |  Extra Reps: 0  |  ID: 0")
-local s4 = section(mainPage, "status")
-statusLbl = infoRow(s4, "Siap")
+-- TRAINING
+local r1 = section(trainPage, "auto training latihan")
+switchRow(r1, "Auto Training", "Teleport ke lingkaran latihan kalau perlu, mulai otomatis, cek ulang kalau berhenti", "AutoTrain", setTrain)
 
-local m1 = section(miscPage, "teleport lingkaran latihan")
-buttonRow(m1, "Teleport ke Lingkaran", "Pindah ke lingkaran latihan sekarang", function()
+local r2 = section(trainPage, "auto tap bonus")
+switchRow(r2, "Auto Tap Bonus", "Tap bonus latihan otomatis (nyala sendiri, bisa bareng latihan manual)", "AutoTap")
+
+local r3 = section(trainPage, "teleport lingkaran latihan")
+buttonRow(r3, "Teleport ke Lingkaran Latihan", "Pindah ke lingkaran latihan sekarang", function()
     if tpToTraining() then
         setStatus("Teleport ke lingkaran latihan", C_GOOD)
     else
@@ -709,24 +904,43 @@ buttonRow(m1, "Teleport ke Lingkaran", "Pindah ke lingkaran latihan sekarang", f
     end
 end)
 
-local m4 = section(miscPage, "equip best sekarang")
-buttonRow(m4, "Equip Best Sekarang", "Pasang hewan terbaik sekali", function()
-    task.spawn(callOnce, "Plot_EquipBest", "Equip Best")
-end)
-
-local m5 = section(miscPage, "sell all sekarang jual")
-buttonRow(m5, "Sell All Sekarang", "Jual hewan kecil sekali", function()
-    task.spawn(callOnce, "Plot_SellAll", "Sell All")
-end)
-
-local m2 = section(miscPage, "stop latihan")
-buttonRow(m2, "Stop Latihan", "Panggil Training_Stop sekarang (matikan Auto Training dulu)", function()
+local r4 = section(trainPage, "stop latihan")
+buttonRow(r4, "Stop Latihan", "Panggil Training_Stop sekarang (matikan Auto Training dulu)", function()
     stopTraining()
     setStatus("Training_Stop dikirim", C_GOOD)
 end)
 
-local m3 = section(miscPage, "reset statistik")
-buttonRow(m3, "Reset Statistik", "Nolkan hitungan tap", function()
+-- SELL
+local l1 = section(sellPage, "auto sell jual")
+switchRow(l1, "Auto Sell", "Jual hewan kecil tiap 60 detik (hewan di kandang aman)", "AutoSell", function(on)
+    if on then startLoop("AutoSell", "Plot_SellAll", SELL_EVERY, "Sell All") end
+end)
+
+local l2 = section(sellPage, "sell all sekarang jual")
+buttonRow(l2, "Sell All Sekarang", "Jual hewan kecil sekali", function()
+    task.spawn(callOnce, "Plot_SellAll", "Sell All")
+end)
+
+-- PET
+local p1 = section(petPage, "auto equip best hewan pet")
+switchRow(p1, "Auto Equip Best", "Pasang hewan terbaik otomatis tiap 30 detik", "AutoEquip", function(on)
+    if on then startLoop("AutoEquip", "Plot_EquipBest", EQUIP_EVERY, "Equip Best") end
+end)
+
+local p2 = section(petPage, "equip best sekarang pet")
+buttonRow(p2, "Equip Best Sekarang", "Pasang hewan terbaik sekali", function()
+    task.spawn(callOnce, "Plot_EquipBest", "Equip Best")
+end)
+
+-- MISC
+local m1 = section(miscPage, "pulihkan tampilan karakter")
+buttonRow(m1, "Pulihkan Tampilan", "Balikin karakter yang invisible (matikan Auto Throw dulu)", function()
+    restoreLook()
+    setStatus("Tampilan dipulihkan", C_GOOD)
+end)
+
+local m2 = section(miscPage, "reset statistik")
+buttonRow(m2, "Reset Statistik", "Nolkan hitungan tap", function()
     taps, extra, lastId = 0, 0, 0
     updateStats()
 end)
@@ -736,13 +950,16 @@ closeBtn.MouseButton1Click:Connect(function() dlg.Visible = true end)
 noBtn.MouseButton1Click:Connect(function() dlg.Visible = false end)
 yesBtn.MouseButton1Click:Connect(function()
     local was = State.AutoTrain
+    local wasThrow = State.AutoThrow
     State.AutoTrain = false
     State.AutoTap = false
     State.AutoEquip = false
     State.AutoSell = false
+    State.AutoThrow = false
     getgenv().__ThrowToken = (getgenv().__ThrowToken or 0) + 1
     if getgenv().__TapConn then pcall(function() getgenv().__TapConn:Disconnect() end) end
     if was then task.spawn(function() task.wait(1.2); stopTraining() end) end
+    if wasThrow then task.spawn(function() task.wait(1.5); restoreLook() end) end
     gui:Destroy()
 end)
 
