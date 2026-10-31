@@ -11,6 +11,7 @@ local R = RS:WaitForChild("Remotes")
 local RETRY = 3            -- jeda kalau Start ditolak
 local SILENT_LIMIT = 20    -- detik tanpa bonus = anggap latihan berhenti
 local TAP_DELAY = 0.15     -- jangan lebih dari 0.4
+local TP_HEIGHT = 3.5      -- tinggi teleport di atas lingkaran
 
 -- bersihkan versi lama
 getgenv().AUTO_TRAIN = false
@@ -528,6 +529,25 @@ local function infoRow(parent, initial)
 end
 
 -- ===== LOGIKA =====
+local function getHRP()
+    return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+end
+
+-- lingkaran latihan ada di plot milik sendiri (posisinya beda tiap server)
+local function getTrainSpot()
+    local props = workspace:FindFirstChild("LocalPlotProps")
+    local area = props and props:FindFirstChild("TrainingArea")
+    return area and area:FindFirstChild("TrainingSpot")
+end
+
+local function tpToTraining()
+    local spot = getTrainSpot()
+    local h = getHRP()
+    if not (spot and h) then return false end
+    h.CFrame = CFrame.new(spot.Position + Vector3.new(0, TP_HEIGHT, 0))
+    return true
+end
+
 local function alive()
     return State.AutoTrain and getgenv().__ThrowToken == myToken
 end
@@ -557,7 +577,7 @@ getgenv().__TapConn = R.Training_Bonus.OnClientEvent:Connect(function(...)
     end)
 end)
 
--- Auto Training (Start, mulai ulang kalau berhenti)
+-- Auto Training (teleport ke lingkaran, Start, mulai ulang kalau berhenti)
 local function trainLoop()
     running = true
     local started = false
@@ -566,13 +586,23 @@ local function trainLoop()
             started = false
             setStatus("Bonus berhenti, mulai ulang latihan...", C_WARN)
         end
+
         if not started then
+            if tpToTraining() then
+                setStatus("Teleport ke lingkaran latihan...", C_GRAY)
+                task.wait(0.5)
+            end
+
             local okS, res = pcall(function() return R.Training_Start:InvokeServer() end)
             if not okS then
                 setStatus("Start error", C_WARN)
                 task.wait(RETRY)
             elseif typeof(res) == "table" and res.Ok == false then
-                setStatus("Start ditolak: " .. tostring(res.Reason), C_WARN)
+                if tostring(res.Reason) == "TooFar" and not getTrainSpot() then
+                    setStatus("Lingkaran latihan tidak ditemukan", C_WARN)
+                else
+                    setStatus("Start ditolak: " .. tostring(res.Reason), C_WARN)
+                end
                 task.wait(RETRY)
             else
                 started = true
@@ -606,7 +636,7 @@ end
 
 -- ===== ISI HALAMAN =====
 local s1 = section(mainPage, "auto training latihan")
-switchRow(s1, "Auto Training", "Mulai latihan otomatis dan mulai ulang kalau berhenti", "AutoTrain", setTrain)
+switchRow(s1, "Auto Training", "Teleport ke lingkaran latihan, mulai otomatis, dan mulai ulang kalau berhenti", "AutoTrain", setTrain)
 
 local s2 = section(mainPage, "auto tap bonus")
 switchRow(s2, "Auto Tap Bonus", "Tap bonus latihan otomatis (nyala sendiri, bisa dipakai bareng latihan manual)", "AutoTap")
@@ -616,14 +646,23 @@ statsLbl = infoRow(s3, "Tap: 0  |  Extra Reps: 0  |  ID: 0")
 local s4 = section(mainPage, "status")
 statusLbl = infoRow(s4, "Siap")
 
-local m1 = section(miscPage, "stop latihan")
-buttonRow(m1, "Stop Latihan", "Panggil Training_Stop sekarang (matikan Auto Training dulu)", function()
+local m1 = section(miscPage, "teleport lingkaran latihan")
+buttonRow(m1, "Teleport ke Lingkaran", "Pindah ke lingkaran latihan sekarang", function()
+    if tpToTraining() then
+        setStatus("Teleport ke lingkaran latihan", C_GOOD)
+    else
+        setStatus("Lingkaran latihan tidak ditemukan", C_WARN)
+    end
+end)
+
+local m2 = section(miscPage, "stop latihan")
+buttonRow(m2, "Stop Latihan", "Panggil Training_Stop sekarang (matikan Auto Training dulu)", function()
     stopTraining()
     setStatus("Training_Stop dikirim", C_GOOD)
 end)
 
-local m2 = section(miscPage, "reset statistik")
-buttonRow(m2, "Reset Statistik", "Nolkan hitungan tap", function()
+local m3 = section(miscPage, "reset statistik")
+buttonRow(m3, "Reset Statistik", "Nolkan hitungan tap", function()
     taps, extra, lastId = 0, 0, 0
     updateStats()
 end)
