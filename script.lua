@@ -12,10 +12,9 @@ local lp = Players.LocalPlayer
 local R = RS:WaitForChild("Remotes")
 
 -- ===== SETTING =====
-local SCRIPT_URL = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/NAMA_FILE.lua"  -- WAJIB DIISI
+local SCRIPT_URL = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/throw.lua"
 local ICON_URL = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/icon.png"
 local ICON_FILE = "tfa_icon.png"
-local CONFIG_FILE = "ThrowForAnimals_configs.json"
 local LASTSTATE_FILE = "ThrowForAnimals_laststate.json"
 
 local RETRY = 3            -- jeda kalau Start latihan ditolak
@@ -31,8 +30,8 @@ local FOOD_MAX = 120       -- batas atas indeks makanan
 local THROW_ACCURACY = 1   -- 1 = bar lempar paling atas
 local THROW_EXTRA = 0.3    -- tambahan setelah waktu terbang
 
--- switch yang ikut disimpan di config dan status terakhir
-local CONFIG_KEYS = { "AutoTrain", "AutoThrow", "AutoBuyFood", "AutoEquipFood", "AutoBar",
+-- switch yang ikut disimpan sebagai status terakhir (untuk Auto Execute)
+local STATE_KEYS = { "AutoTrain", "AutoThrow", "AutoBuyFood", "AutoEquipFood", "AutoBar",
     "AutoSell", "AutoEquip", "AutoFence", "HideMine", "HideOthers", "Invisible", "AutoExec", "AntiAfk" }
 
 -- ===== BERSIHKAN VERSI LAMA =====
@@ -55,7 +54,6 @@ local C_BAR  = Color3.fromRGB(26, 26, 32)
 local C_ROW  = Color3.fromRGB(34, 34, 42)
 local C_OFF  = Color3.fromRGB(70, 70, 82)
 local C_ON   = Color3.fromRGB(60, 190, 100)
-local C_RED  = Color3.fromRGB(150, 55, 55)
 local C_GRAY = Color3.fromRGB(150, 150, 160)
 local C_WARN = Color3.fromRGB(240, 170, 60)
 local C_GOOD = Color3.fromRGB(90, 200, 120)
@@ -73,26 +71,6 @@ local lastEvent = os.clock()
 local function corner(inst, r) Instance.new("UICorner", inst).CornerRadius = UDim.new(0, r) end
 local order = 0
 local function nextOrder() order += 1; return order end
-
--- ===== FILE CONFIG =====
-local function fsOk() return writefile and readfile and isfile end
-
-local cfgData = { configs = {}, autoload = nil }
-local function readCfgFile()
-    if not (fsOk() and isfile(CONFIG_FILE)) then return end
-    local okR, data = pcall(function() return HttpService:JSONDecode(readfile(CONFIG_FILE)) end)
-    if okR and typeof(data) == "table" and typeof(data.configs) == "table" then
-        cfgData.configs = data.configs
-        cfgData.autoload = (typeof(data.autoload) == "string" and data.autoload ~= "") and data.autoload or nil
-    end
-end
-local function writeCfgFile()
-    if not fsOk() then return false end
-    return pcall(function()
-        writefile(CONFIG_FILE, HttpService:JSONEncode({ configs = cfgData.configs, autoload = cfgData.autoload or "" }))
-    end)
-end
-readCfgFile()
 
 -- ===== ROOT =====
 local gui = Instance.new("ScreenGui")
@@ -516,7 +494,7 @@ local function textBlock(parent, titleText, desc, widthOffset)
     end
 end
 
-local statusLbl, statsLbl, cfgStatusLbl
+local statusLbl, statsLbl, usersLbl
 local function setStatus(t, color)
     if statusLbl and statusLbl.Parent then
         statusLbl.Text = t
@@ -526,6 +504,11 @@ end
 local function updateStats()
     if statsLbl and statsLbl.Parent then
         statsLbl.Text = "Tap: " .. taps .. "  |  Extra Reps: " .. extra .. "  |  ID: " .. lastId
+    end
+end
+local function updateUsers()
+    if usersLbl and usersLbl.Parent then
+        usersLbl.Text = "Total User: " .. #Players:GetPlayers() .. " / " .. Players.MaxPlayers
     end
 end
 
@@ -591,4 +574,27 @@ local function infoRow(parent, initial)
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, -20, 0, 0)
     lbl.AutomaticSize = Enum.AutomaticSize.Y
-    lbl.Position = UDim2
+    lbl.Position = UDim2.new(0, 10, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = initial
+    lbl.TextColor3 = C_GRAY
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 11
+    lbl.TextWrapped = true
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextYAlignment = Enum.TextYAlignment.Top
+    lbl.Parent = row
+    Instance.new("UIPadding", lbl).PaddingTop = UDim.new(0, 8)
+    Instance.new("UIPadding", row).PaddingBottom = UDim.new(0, 8)
+    return lbl
+end
+
+-- ===== LOGIKA UMUM =====
+local function getHRP()
+    return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+end
+
+-- matikan switch dari kode (switch ikut geser ke OFF)
+local function forceOff(key)
+    State[key] = false
+    if switchRefresh[key] then switchRefresh[key](true
