@@ -12,6 +12,12 @@ local lp = Players.LocalPlayer
 local R = RS:WaitForChild("Remotes")
 
 -- ===== SETTING =====
+local SCRIPT_URL = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/NAMA_FILE.lua"  -- WAJIB DIISI
+local ICON_URL = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/icon.png"
+local ICON_FILE = "tfa_icon.png"
+local CONFIG_FILE = "ThrowForAnimals_configs.json"
+local LASTSTATE_FILE = "ThrowForAnimals_laststate.json"
+
 local RETRY = 3            -- jeda kalau Start latihan ditolak
 local SILENT_LIMIT = 20    -- detik tanpa bonus = cek ulang latihan
 local TAP_DELAY = 0.15     -- jangan lebih dari 0.4
@@ -24,13 +30,13 @@ local FOOD_EVERY = 15      -- detik, jeda Auto Buy dan Equip Food
 local FOOD_MAX = 120       -- batas atas indeks makanan
 local THROW_ACCURACY = 1   -- 1 = bar lempar paling atas
 local THROW_EXTRA = 0.3    -- tambahan setelah waktu terbang
-local SCRIPT_URL = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/script.lua"
-local CONFIG_FILE = "ThrowForAnimals_config.json"
-local AUTOLOAD_FILE = "ThrowForAnimals_autoload.txt"
-local CONFIG_KEYS = { "AutoTrain", "AutoTap", "AutoThrow", "AutoEquip", "AutoSell", "AutoBar",
-    "AutoFence", "AutoBuyFood", "AutoEquipFood", "AntiAfk", "AutoExec" }
+
+-- switch yang ikut disimpan di config dan status terakhir
+local CONFIG_KEYS = { "AutoTrain", "AutoThrow", "AutoBuyFood", "AutoEquipFood", "AutoBar",
+    "AutoSell", "AutoEquip", "AutoFence", "HideMine", "HideOthers", "Invisible", "AutoExec", "AntiAfk" }
 
 -- ===== BERSIHKAN VERSI LAMA =====
+if getgenv().TFAVisual then pcall(getgenv().TFAVisual.stop) end
 getgenv().THROW_POS = nil
 if getgenv().__TapConn then pcall(function() getgenv().__TapConn:Disconnect() end) end
 if getgenv().__ThrowConns then
@@ -49,19 +55,14 @@ local C_BAR  = Color3.fromRGB(26, 26, 32)
 local C_ROW  = Color3.fromRGB(34, 34, 42)
 local C_OFF  = Color3.fromRGB(70, 70, 82)
 local C_ON   = Color3.fromRGB(60, 190, 100)
+local C_RED  = Color3.fromRGB(150, 55, 55)
 local C_GRAY = Color3.fromRGB(150, 150, 160)
 local C_WARN = Color3.fromRGB(240, 170, 60)
 local C_GOOD = Color3.fromRGB(90, 200, 120)
 
-local State = { AutoTrain = false, AutoTap = true, AutoEquip = false, AutoSell = false, AutoThrow = false,
-    AutoBar = false, AutoFence = false, AutoBuyFood = false, AutoEquipFood = false,
-    AntiAfk = true, AutoExec = false, AutoLoad = false }
-
--- baca flag Auto Load sebelum UI dibuat, biar switch-nya langsung tampil benar
-if isfile and readfile and isfile(AUTOLOAD_FILE) then
-    local okA, v = pcall(readfile, AUTOLOAD_FILE)
-    if okA and v == "1" then State.AutoLoad = true end
-end
+local State = { AutoTrain = false, AutoThrow = false, AutoBuyFood = false, AutoEquipFood = false,
+    AutoBar = false, AutoSell = false, AutoEquip = false, AutoFence = false,
+    HideMine = false, HideOthers = false, Invisible = false, AutoExec = false, AntiAfk = true }
 
 local taps, extra, lastId = 0, 0, 0
 local running = false
@@ -70,6 +71,28 @@ local throws = 0
 local lastEvent = os.clock()
 
 local function corner(inst, r) Instance.new("UICorner", inst).CornerRadius = UDim.new(0, r) end
+local order = 0
+local function nextOrder() order += 1; return order end
+
+-- ===== FILE CONFIG =====
+local function fsOk() return writefile and readfile and isfile end
+
+local cfgData = { configs = {}, autoload = nil }
+local function readCfgFile()
+    if not (fsOk() and isfile(CONFIG_FILE)) then return end
+    local okR, data = pcall(function() return HttpService:JSONDecode(readfile(CONFIG_FILE)) end)
+    if okR and typeof(data) == "table" and typeof(data.configs) == "table" then
+        cfgData.configs = data.configs
+        cfgData.autoload = (typeof(data.autoload) == "string" and data.autoload ~= "") and data.autoload or nil
+    end
+end
+local function writeCfgFile()
+    if not fsOk() then return false end
+    return pcall(function()
+        writefile(CONFIG_FILE, HttpService:JSONEncode({ configs = cfgData.configs, autoload = cfgData.autoload or "" }))
+    end)
+end
+readCfgFile()
 
 -- ===== ROOT =====
 local gui = Instance.new("ScreenGui")
@@ -233,12 +256,13 @@ do
     end))
 end
 
--- ===== IKON MINIMIZE =====
+-- ===== IKON MINIMIZE (icon.png, cadangan huruf "T") =====
 local mini = Instance.new("ImageButton")
 mini.Size = UDim2.new(0, 46, 0, 46)
 mini.BackgroundColor3 = C_BAR
 mini.AutoButtonColor = false
 mini.Image = ""
+mini.ScaleType = Enum.ScaleType.Crop
 mini.Position = UDim2.new(0, 16, 0.5, -23)
 mini.Visible = false
 mini.Parent = gui
@@ -253,6 +277,20 @@ miniLetter.TextColor3 = Color3.new(1, 1, 1)
 miniLetter.Font = Enum.Font.GothamBold
 miniLetter.TextSize = 22
 miniLetter.Parent = mini
+
+task.spawn(function()
+    local okIcon, asset = pcall(function()
+        local getAsset = getcustomasset or getsynasset
+        if not (writefile and getAsset) then error("executor tidak mendukung writefile/getcustomasset") end
+        local data = game:HttpGet(ICON_URL)
+        writefile(ICON_FILE, data)
+        return getAsset(ICON_FILE)
+    end)
+    if okIcon and asset and mini.Parent then
+        mini.Image = asset
+        miniLetter.Visible = false
+    end
+end)
 
 local iconPlaced = false
 minBtn.MouseButton1Click:Connect(function()
@@ -288,7 +326,7 @@ do
     end))
 end
 
--- ===== BODY =====
+-- ===== BODY: SIDEBAR + HALAMAN =====
 local body = Instance.new("Frame")
 body.Size = UDim2.new(1, 0, 1, -32)
 body.Position = UDim2.new(0, 0, 0, 32)
@@ -368,14 +406,14 @@ local function setTab(name)
     end
 end
 
-local function newTab(name, order, icon)
+local function newTab(name, ord, icon)
     local b = Instance.new("TextButton")
     b.Size = UDim2.new(1, 0, 0, 28)
     b.Text = name
     b.Font = Enum.Font.GothamBold
     b.TextSize = 11
     b.TextXAlignment = Enum.TextXAlignment.Left
-    b.LayoutOrder = order
+    b.LayoutOrder = ord
     b.Parent = tabList
     corner(b, 8)
     Instance.new("UIPadding", b).PaddingLeft = UDim.new(0, 28)
@@ -392,18 +430,12 @@ local function newTab(name, order, icon)
     b.MouseButton1Click:Connect(function() setTab(name) end)
 end
 
-local mainPage = newPage("Main")
-local throwPage = newPage("Throw")
-local trainPage = newPage("Training")
-local sellPage = newPage("Sell")
-local petPage = newPage("Pet")
-local miscPage = newPage("Misc")
-newTab("Main", 1, "🏠")
-newTab("Throw", 2, "🎯")
-newTab("Training", 3, "💪")
-newTab("Sell", 4, "💰")
-newTab("Pet", 5, "🐾")
-newTab("Misc", 6, "⚙")
+local tabDefs = { { "Main", "🏠" }, { "Throw", "🎯" }, { "Training", "💪" },
+    { "Sell", "💰" }, { "Pet", "🐾" }, { "Misc", "⚙" } }
+for i, t in ipairs(tabDefs) do
+    newPage(t[1])
+    newTab(t[1], i, t[2])
+end
 
 -- ===== KOMPONEN =====
 local sections = {}
@@ -412,7 +444,7 @@ local function section(page, keyword)
     f.Size = UDim2.new(1, 0, 0, 0)
     f.AutomaticSize = Enum.AutomaticSize.Y
     f.BackgroundTransparency = 1
-    f.LayoutOrder = #sections + 1
+    f.LayoutOrder = nextOrder()
     f.Parent = page
     local l = Instance.new("UIListLayout", f)
     l.Padding = UDim.new(0, 4)
@@ -427,6 +459,20 @@ search:GetPropertyChangedSignal("Text"):Connect(function()
         s[1].Visible = (q == "") or (s[2]:find(q, 1, true) ~= nil)
     end
 end)
+
+local function groupTitle(page, text)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, 0, 0, 16)
+    l.BackgroundTransparency = 1
+    l.Text = text
+    l.TextColor3 = Color3.new(1, 1, 1)
+    l.Font = Enum.Font.GothamBold
+    l.TextSize = 12
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.LayoutOrder = nextOrder()
+    l.Parent = page
+    return l
+end
 
 local function textBlock(parent, titleText, desc, widthOffset)
     local txt = Instance.new("Frame")
@@ -470,7 +516,7 @@ local function textBlock(parent, titleText, desc, widthOffset)
     end
 end
 
-local statusLbl, statsLbl
+local statusLbl, statsLbl, cfgStatusLbl
 local function setStatus(t, color)
     if statusLbl and statusLbl.Parent then
         statusLbl.Text = t
@@ -493,7 +539,7 @@ local function switchRow(parent, text, desc, key, onChange)
     row.BackgroundColor3 = C_ROW
     row.Text = ""
     row.AutoButtonColor = false
-    row.LayoutOrder = 1
+    row.LayoutOrder = nextOrder()
     row.Parent = parent
     corner(row, 8)
     Instance.new("UISizeConstraint", row).MinSize = Vector2.new(0, 38)
@@ -533,736 +579,16 @@ local function switchRow(parent, text, desc, key, onChange)
     refresh(false)
 end
 
-local function buttonRow(parent, text, desc, cb)
-    local row = Instance.new("TextButton")
-    row.Size = UDim2.new(1, 0, 0, 0)
-    row.AutomaticSize = Enum.AutomaticSize.Y
-    row.BackgroundColor3 = C_ROW
-    row.Text = ""
-    row.AutoButtonColor = true
-    row.LayoutOrder = 1
-    row.Parent = parent
-    corner(row, 8)
-    Instance.new("UISizeConstraint", row).MinSize = Vector2.new(0, 38)
-    textBlock(row, text, desc, -20)
-    row.MouseButton1Click:Connect(function() cb() end)
-end
-
 local function infoRow(parent, initial)
     local row = Instance.new("Frame")
     row.Size = UDim2.new(1, 0, 0, 0)
     row.AutomaticSize = Enum.AutomaticSize.Y
     row.BackgroundColor3 = C_ROW
-    row.LayoutOrder = 1
+    row.BorderSizePixel = 0
+    row.LayoutOrder = nextOrder()
     row.Parent = parent
     corner(row, 8)
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, -20, 0, 0)
     lbl.AutomaticSize = Enum.AutomaticSize.Y
-    lbl.Position = UDim2.new(0, 10, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = initial
-    lbl.TextColor3 = C_GRAY
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 11
-    lbl.TextWrapped = true
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.TextYAlignment = Enum.TextYAlignment.Top
-    lbl.Parent = row
-    Instance.new("UIPadding", lbl).PaddingTop = UDim.new(0, 8)
-    Instance.new("UIPadding", row).PaddingBottom = UDim.new(0, 8)
-    return lbl
-end
-
--- ===== LOGIKA UMUM =====
-local function getHRP()
-    return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-end
-
--- matikan switch dari kode (switch ikut geser ke OFF)
-local function forceOff(key)
-    State[key] = false
-    if switchRefresh[key] then switchRefresh[key](true) end
-end
-
-local function restoreLook()
-    pcall(function() R.Throw_Cancel:InvokeServer() end)
-    local char = lp.Character
-    if char then
-        for _, v in ipairs(char:GetDescendants()) do
-            if v:IsA("BasePart") then
-                if v.Name ~= "HumanoidRootPart" then v.Transparency = 0 end
-                v.LocalTransparencyModifier = 0
-            elseif v:IsA("Decal") then
-                v.Transparency = 0
-            end
-        end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then workspace.CurrentCamera.CameraSubject = hum end
-    end
-    workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
-end
-
--- ===== TRAINING =====
--- lingkaran latihan ada di plot milik sendiri (posisinya beda tiap server)
-local function getTrainSpot()
-    local props = workspace:FindFirstChild("LocalPlotProps")
-    local area = props and props:FindFirstChild("TrainingArea")
-    return area and area:FindFirstChild("TrainingSpot")
-end
-
-local function tpToTraining()
-    local spot = getTrainSpot()
-    local h = getHRP()
-    if not (spot and h) then return false end
-    h.CFrame = CFrame.new(spot.Position + Vector3.new(0, TP_HEIGHT, 0))
-    return true
-end
-
-local function alive()
-    return State.AutoTrain and getgenv().__ThrowToken == myToken
-end
-
--- Auto Tap Bonus (event dari server membawa ID bonus)
-local function pickValue(args)
-    for _, a in ipairs(args) do
-        if typeof(a) == "number" then return a end
-    end
-    return nil
-end
-
-getgenv().__TapConn = R.Training_Bonus.OnClientEvent:Connect(function(...)
-    lastEvent = os.clock()
-    if not State.AutoTap then return end
-    local id = pickValue({ ... })
-    if not id then return end
-    task.spawn(function()
-        task.wait(TAP_DELAY)
-        local okT, res = pcall(function() return R.Training_TapBonus:InvokeServer(id) end)
-        if okT and typeof(res) == "table" and res.Ok then
-            taps += 1
-            extra += tonumber(res.ExtraReps) or 0
-            lastId = id
-            updateStats()
-        end
-    end)
-end)
-
--- Auto Training (Start, teleport kalau TooFar, Busy = sudah latihan)
-local function trainLoop()
-    running = true
-    local started = false
-    while alive() do
-        if started and os.clock() - lastEvent > SILENT_LIMIT then
-            started = false
-            setStatus("Bonus berhenti, cek ulang latihan...", C_WARN)
-        end
-
-        if not started then
-            local okS, res = pcall(function() return R.Training_Start:InvokeServer() end)
-            local reason = (okS and typeof(res) == "table" and res.Ok == false) and tostring(res.Reason) or nil
-
-            if not okS then
-                setStatus("Start error", C_WARN)
-                task.wait(RETRY)
-            elseif reason == "Busy" then
-                started = true
-                lastEvent = os.clock()
-                setStatus("Latihan sudah aktif (Busy)", C_GOOD)
-            elseif reason == "TooFar" then
-                if tpToTraining() then
-                    setStatus("Teleport ke lingkaran latihan...", C_GRAY)
-                    task.wait(0.6)
-                else
-                    setStatus("Lingkaran latihan tidak ditemukan", C_WARN)
-                    task.wait(RETRY)
-                end
-            elseif reason then
-                setStatus("Start ditolak: " .. reason, C_WARN)
-                task.wait(RETRY)
-            else
-                started = true
-                lastEvent = os.clock()
-                setStatus("Latihan berjalan", C_GOOD)
-            end
-        end
-        task.wait(1)
-    end
-    running = false
-end
-
-local function stopTraining()
-    pcall(function() R.Training_Stop:InvokeServer() end)
-end
-
-local function setTrain(on)
-    if on then
-        if State.AutoThrow then
-            forceOff("AutoTrain")
-            setStatus("Auto Throw lagi nyala, Auto Training dibatalkan", C_WARN)
-            return
-        end
-        if running then return end
-        task.spawn(trainLoop)
-    else
-        setStatus("Menghentikan latihan...", C_GRAY)
-        task.spawn(function()
-            local t0 = os.clock()
-            while running and os.clock() - t0 < 5 do task.wait(0.1) end
-            stopTraining()
-            setStatus("Latihan berhenti", C_GRAY)
-        end)
-    end
-end
-
--- ===== LOOP UMUM (Equip Best, Sell, Upgrade) =====
-local loops = {}
-
-local function summarize(res)
-    if typeof(res) ~= "table" then return tostring(res) end
-    local p = {}
-    for k, v in pairs(res) do p[#p + 1] = tostring(k) .. "=" .. tostring(v) end
-    local s = table.concat(p, ", ")
-    return #s > 90 and s:sub(1, 90) .. "..." or s
-end
-
-local function callOnce(remoteName, label)
-    local okC, res = pcall(function() return R[remoteName]:InvokeServer() end)
-    if not okC then
-        setStatus(label .. ": error", C_WARN)
-    elseif typeof(res) == "table" and res.Ok == false then
-        setStatus(label .. ": " .. tostring(res.Reason), C_WARN)
-    else
-        setStatus(label .. ": " .. summarize(res), C_GOOD)
-    end
-end
-
-local function startFnLoop(key, interval, fn)
-    if loops[key] then return end
-    loops[key] = true
-    task.spawn(function()
-        while State[key] and getgenv().__ThrowToken == myToken do
-            local okF, err = pcall(fn)
-            if not okF then setStatus("Error: " .. tostring(err), C_WARN) end
-            local t0 = os.clock()
-            while State[key] and getgenv().__ThrowToken == myToken and os.clock() - t0 < interval do
-                task.wait(0.5)
-            end
-        end
-        loops[key] = false
-    end)
-end
-
-local function startLoop(key, remoteName, interval, label)
-    startFnLoop(key, interval, function() callOnce(remoteName, label) end)
-end
-
--- Upgrade bar stand (kalau TooFar, teleport ke lingkaran latihan, kecuali Auto Throw nyala)
-local function upgradeBar()
-    local okC, res = pcall(function() return R.Stand_Upgrade:InvokeServer() end)
-    if okC and typeof(res) == "table" and res.Ok == false and tostring(res.Reason) == "TooFar" then
-        if not State.AutoThrow and tpToTraining() then
-            task.wait(0.6)
-            okC, res = pcall(function() return R.Stand_Upgrade:InvokeServer() end)
-        end
-    end
-    if not okC then
-        setStatus("Upgrade Bar: error", C_WARN)
-    elseif typeof(res) == "table" and res.Ok == false then
-        setStatus("Upgrade Bar: " .. tostring(res.Reason), C_WARN)
-    else
-        setStatus("Upgrade Bar: " .. summarize(res), C_GOOD)
-    end
-end
-
--- ===== MAKANAN (indeks lebih tinggi dianggap lebih baik) =====
-local foodNext = 1       -- indeks berikutnya yang dicoba dibeli
-local foodBest = 0       -- indeks makanan terbaik yang sudah dimiliki
-local foodEquipped = 0
-
-local function buyFood()
-    for _ = 1, 80 do
-        if not State.AutoBuyFood then return end
-        if foodNext > FOOD_MAX then
-            setStatus("Buy Food: sudah mencapai batas indeks", C_GRAY)
-            return
-        end
-        local okB, res = pcall(function() return R.Shop_Buy:InvokeServer(foodNext) end)
-        if not okB then
-            setStatus("Buy Food: error", C_WARN)
-            return
-        end
-        local reason = (typeof(res) == "table" and res.Ok == false) and tostring(res.Reason):lower() or nil
-        if not reason then
-            foodBest = math.max(foodBest, foodNext)
-            setStatus("Beli makanan #" .. foodNext .. " berhasil", C_GOOD)
-            foodNext += 1
-            task.wait(0.3)
-        elseif reason:find("owned") or reason:find("already") or reason:find("bought") then
-            foodBest = math.max(foodBest, foodNext)
-            foodNext += 1
-            task.wait(0.15)
-        else
-            setStatus("Buy Food #" .. foodNext .. ": " .. reason, C_WARN)
-            return
-        end
-    end
-end
-
-local function equipBestFood()
-    -- belum tahu makanan terbaik: coba dari atas, yang pertama berhasil di-equip = terbaik yang dimiliki
-    if foodBest <= 0 then
-        for i = FOOD_MAX, 1, -1 do
-            if not State.AutoEquipFood then return end
-            local okE, res = pcall(function() return R.Shop_Equip:InvokeServer(i) end)
-            local reason = (okE and typeof(res) == "table" and res.Ok == false) and tostring(res.Reason):lower() or nil
-            if okE and (not reason or reason:find("already")) then
-                foodBest = i
-                foodEquipped = i
-                setStatus("Makanan terbaik #" .. i .. " dipakai", C_GOOD)
-                return
-            end
-            task.wait(0.08)
-        end
-        setStatus("Equip Food: tidak ada makanan yang bisa di-equip", C_WARN)
-        return
-    end
-
-    if foodBest == foodEquipped then return end
-    local okE, res = pcall(function() return R.Shop_Equip:InvokeServer(foodBest) end)
-    if okE and not (typeof(res) == "table" and res.Ok == false) then
-        foodEquipped = foodBest
-        setStatus("Equip makanan #" .. foodBest, C_GOOD)
-    else
-        setStatus("Equip Food #" .. foodBest .. ": " .. summarize(res), C_WARN)
-    end
-end
-
--- ===== AUTO THROW =====
--- garis lempar global: Workspace.StarterArea.CrossLine
-local function getThrowLine()
-    local area = workspace:FindFirstChild("StarterArea")
-    return area and area:FindFirstChild("CrossLine")
-end
-
-local function tpToThrow(useSaved)
-    local h = getHRP()
-    if not h then return false end
-    local saved = getgenv().THROW_POS
-
-    if useSaved and saved then
-        h.CFrame = CFrame.new(saved + Vector3.new(0, 0.5, 0))
-        return true
-    end
-
-    local line = getThrowLine()
-    if line and line:IsA("BasePart") then
-        local p = line.Position
-        h.CFrame = CFrame.new(p.X, p.Y + LINE_HEIGHT, p.Z)
-        return true
-    end
-
-    if saved then
-        h.CFrame = CFrame.new(saved + Vector3.new(0, 0.5, 0))
-        return true
-    end
-    return false
-end
-
-local tooFarStreak = 0
-
-local function doThrow()
-    local s = R.Throw_Start:InvokeServer()
-    if typeof(s) ~= "table" then
-        setStatus("Start: balasan tidak dikenal", C_WARN)
-        task.wait(2)
-        return
-    end
-
-    if not s.Ok then
-        local why = tostring(s.Reason)
-        if why == "TooFar" then
-            tooFarStreak += 1
-            if tooFarStreak >= 6 then
-                setStatus("TooFar terus: cek garis lempar atau simpan posisi manual (tab Throw)", C_WARN)
-                tooFarStreak = 0
-                task.wait(5)
-            elseif tpToThrow(tooFarStreak >= 3) then
-                setStatus("TooFar, balik ke posisi lempar...", C_GRAY)
-                task.wait(0.6)
-            else
-                setStatus("TooFar: posisi lempar tidak ditemukan", C_WARN)
-                task.wait(2)
-            end
-        elseif why == "Busy" then
-            setStatus("Busy, reset sesi lempar", C_WARN)
-            pcall(function() R.Throw_Complete:InvokeServer() end)
-            task.wait(0.5)
-            pcall(function() R.Throw_Cancel:InvokeServer() end)
-            task.wait(1)
-        elseif why == "Cooldown" then
-            task.wait(0.5)
-        else
-            setStatus("Start ditolak: " .. why, C_WARN)
-            task.wait(2)
-        end
-        return
-    end
-    tooFarStreak = 0
-
-    -- Start berhasil = posisi ini valid, simpan sebagai cadangan
-    if not getgenv().THROW_POS then
-        local h = getHRP()
-        if h then getgenv().THROW_POS = h.Position end
-    end
-
-    local r = R.Throw_Resolve:InvokeServer(THROW_ACCURACY)
-    if typeof(r) ~= "table" or not r.Ok then
-        setStatus("Resolve gagal", C_WARN)
-        pcall(function() R.Throw_Cancel:InvokeServer() end)
-        task.wait(2)
-        return
-    end
-
-    throws += 1
-    setStatus(("Lempar #%d: %s (%s)"):format(throws, tostring(r.DisplayName), tostring(r.Rarity)), C_GOOD)
-
-    task.wait((tonumber(r.FlightTime) or 6) + THROW_EXTRA)
-
-    local done = false
-    task.spawn(function()
-        pcall(function() R.Throw_Complete:InvokeServer() end)
-        done = true
-    end)
-    local t0 = os.clock()
-    while not done and os.clock() - t0 < 3 do task.wait(0.1) end
-
-    task.wait(0.5)
-    tpToThrow()   -- karakter dipindah game ke kandang, balik ke garis lempar
-end
-
-local function throwLoop()
-    throwing = true
-    if tpToThrow() then
-        setStatus("Teleport ke garis lempar...", C_GRAY)
-        task.wait(0.5)
-    end
-    while State.AutoThrow and getgenv().__ThrowToken == myToken do
-        local okT, err = pcall(doThrow)
-        if not okT then
-            setStatus("Error: " .. tostring(err), C_WARN)
-            task.wait(2)
-        end
-        task.wait(0.2)
-    end
-    throwing = false
-end
-
-local function setThrow(on)
-    if on then
-        if State.AutoTrain then
-            forceOff("AutoThrow")
-            setStatus("Auto Training lagi nyala, Auto Throw dibatalkan", C_WARN)
-            return
-        end
-        if throwing then return end
-        task.spawn(throwLoop)
-    else
-        setStatus("Menghentikan lempar...", C_GRAY)
-        task.spawn(function()
-            local t0 = os.clock()
-            while throwing and os.clock() - t0 < 12 do task.wait(0.2) end
-            restoreLook()
-            setStatus("Lempar berhenti", C_GRAY)
-        end)
-    end
-end
-
--- ===== ANTI AFK, AUTO EXECUTE, CONFIG =====
-local function setAntiAfk(on)
-    if getgenv().__AfkConn then
-        pcall(function() getgenv().__AfkConn:Disconnect() end)
-        getgenv().__AfkConn = nil
-    end
-    if on then
-        getgenv().__AfkConn = lp.Idled:Connect(function()
-            VirtualUser:CaptureController()
-            VirtualUser:ClickButton2(Vector2.new())
-        end)
-    end
-end
-
-local function setAutoExec(on)
-    if getgenv().__TpConn then
-        pcall(function() getgenv().__TpConn:Disconnect() end)
-        getgenv().__TpConn = nil
-    end
-    if not on then return end
-
-    local qot = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
-    if not qot then
-        forceOff("AutoExec")
-        setStatus("Auto Execute: executor tidak mendukung queue_on_teleport", C_WARN)
-        return
-    end
-
-    getgenv().__TpConn = lp.OnTeleport:Connect(function()
-        local keys = {}
-        for k, v in pairs(State) do
-            if v then keys[#keys + 1] = string.format("%q", k) end
-        end
-        local code = "getgenv().ThrowAutoStart = {" .. table.concat(keys, ",") .. "}\n"
-            .. "loadstring(game:HttpGet(\"" .. SCRIPT_URL .. "\"))()"
-        qot(code)
-    end)
-    setStatus("Auto Execute aktif (jalan lagi setelah pindah server)", C_GOOD)
-end
-
-local function fsOk()
-    return writefile and readfile and isfile
-end
-
--- ubah satu switch dari kode (visual ikut berubah, handler dipanggil)
-local function applyState(key, value)
-    if State[key] == nil or State[key] == value then return end
-    State[key] = value
-    if switchRefresh[key] then switchRefresh[key](false) end
-    if switchHandlers[key] then switchHandlers[key](value) end
-end
-
-local function saveConfig()
-    if not fsOk() then
-        setStatus("Config: executor tidak mendukung penyimpanan file", C_WARN)
-        return
-    end
-    local data = {}
-    for _, k in ipairs(CONFIG_KEYS) do data[k] = State[k] == true end
-    local okW, err = pcall(function()
-        writefile(CONFIG_FILE, HttpService:JSONEncode(data))
-    end)
-    if okW then
-        setStatus("Config disimpan", C_GOOD)
-    else
-        setStatus("Gagal simpan config: " .. tostring(err), C_WARN)
-    end
-end
-
-local function loadConfig()
-    if not fsOk() then
-        setStatus("Config: executor tidak mendukung penyimpanan file", C_WARN)
-        return false
-    end
-    if not isfile(CONFIG_FILE) then
-        setStatus("Belum ada config tersimpan", C_WARN)
-        return false
-    end
-    local okR, data = pcall(function()
-        return HttpService:JSONDecode(readfile(CONFIG_FILE))
-    end)
-    if not okR or typeof(data) ~= "table" then
-        setStatus("File config rusak", C_WARN)
-        return false
-    end
-    -- matikan dulu yang OFF di config, baru nyalain yang ON (hindari bentrok Throw dan Training)
-    for _, k in ipairs(CONFIG_KEYS) do
-        if data[k] == false then applyState(k, false) end
-    end
-    for _, k in ipairs(CONFIG_KEYS) do
-        if data[k] == true then applyState(k, true) end
-    end
-    setStatus("Config dimuat", C_GOOD)
-    return true
-end
-
-local function setAutoLoad(on)
-    if not fsOk() then
-        forceOff("AutoLoad")
-        setStatus("Config: executor tidak mendukung penyimpanan file", C_WARN)
-        return
-    end
-    pcall(function() writefile(AUTOLOAD_FILE, on and "1" or "0") end)
-    setStatus(on and "Auto Load Config aktif" or "Auto Load Config mati", C_GRAY)
-end
-
--- ===== ISI HALAMAN =====
--- MAIN
-do
-    local a1 = section(mainPage, "status")
-    statusLbl = infoRow(a1, "Siap")
-
-    local a2 = section(mainPage, "statistik tap")
-    statsLbl = infoRow(a2, "Tap: 0  |  Extra Reps: 0  |  ID: 0")
-
-    local a3 = section(mainPage, "info")
-    infoRow(a3, "Auto Throw dan Auto Training tidak bisa nyala bareng. Yang dinyalakan paling akhir otomatis mati.")
-end
-
--- THROW
-do
-    local s1 = section(throwPage, "auto throw lempar makanan")
-    switchRow(s1, "Auto Throw", "Lempar makanan otomatis (bar paling atas)", "AutoThrow", setThrow)
-
-    local s2 = section(throwPage, "auto buy food makanan beli")
-    switchRow(s2, "Auto Buy Food", "Beli makanan berikutnya otomatis kalau uang cukup", "AutoBuyFood", function(on)
-        if on then startFnLoop("AutoBuyFood", FOOD_EVERY, buyFood) end
-    end)
-
-    local s3 = section(throwPage, "auto equip best food makanan")
-    switchRow(s3, "Auto Equip Best Food", "Pakai makanan terbaik yang sudah dimiliki", "AutoEquipFood", function(on)
-        if on then startFnLoop("AutoEquipFood", FOOD_EVERY, equipBestFood) end
-    end)
-
-    local s4 = section(throwPage, "teleport garis lempar")
-    buttonRow(s4, "Teleport ke Garis Lempar", "Pindah ke garis lempar sekarang", function()
-        if tpToThrow() then
-            setStatus("Teleport ke garis lempar", C_GOOD)
-        else
-            setStatus("Garis lempar tidak ditemukan", C_WARN)
-        end
-    end)
-
-    local s5 = section(throwPage, "simpan posisi lempar")
-    buttonRow(s5, "Simpan Posisi Lempar", "Cadangan kalau garis lempar tidak cocok", function()
-        local h = getHRP()
-        if h then
-            getgenv().THROW_POS = h.Position
-            setStatus("Posisi lempar disimpan", C_GOOD)
-        else
-            setStatus("Karakter tidak ditemukan", C_WARN)
-        end
-    end)
-end
-
--- TRAINING
-do
-    local s1 = section(trainPage, "auto training latihan")
-    switchRow(s1, "Auto Training", "Teleport ke lingkaran latihan kalau perlu, mulai otomatis, cek ulang kalau berhenti", "AutoTrain", setTrain)
-
-    local s2 = section(trainPage, "auto tap bonus")
-    switchRow(s2, "Auto Tap Bonus", "Tap bonus latihan otomatis (nyala sendiri, bisa bareng latihan manual)", "AutoTap")
-
-    local s3 = section(trainPage, "auto upgrade bar stand")
-    switchRow(s3, "Auto Upgrade Bar", "Upgrade bar latihan tiap 10 detik (uang harus cukup)", "AutoBar", function(on)
-        if on then startFnLoop("AutoBar", UPGRADE_EVERY, upgradeBar) end
-    end)
-
-    local s4 = section(trainPage, "teleport lingkaran latihan")
-    buttonRow(s4, "Teleport ke Lingkaran Latihan", "Pindah ke lingkaran latihan sekarang", function()
-        if tpToTraining() then
-            setStatus("Teleport ke lingkaran latihan", C_GOOD)
-        else
-            setStatus("Lingkaran latihan tidak ditemukan", C_WARN)
-        end
-    end)
-
-    local s5 = section(trainPage, "stop latihan")
-    buttonRow(s5, "Stop Latihan", "Panggil Training_Stop sekarang (matikan Auto Training dulu)", function()
-        stopTraining()
-        setStatus("Training_Stop dikirim", C_GOOD)
-    end)
-end
-
--- SELL
-do
-    local s1 = section(sellPage, "auto sell jual")
-    switchRow(s1, "Auto Sell", "Jual hewan kecil tiap 60 detik (hewan di kandang aman)", "AutoSell", function(on)
-        if on then startLoop("AutoSell", "Plot_SellAll", SELL_EVERY, "Sell All") end
-    end)
-
-    local s2 = section(sellPage, "sell all sekarang jual")
-    buttonRow(s2, "Sell All Sekarang", "Jual hewan kecil sekali", function()
-        task.spawn(callOnce, "Plot_SellAll", "Sell All")
-    end)
-end
-
--- PET
-do
-    local s1 = section(petPage, "auto equip best hewan pet")
-    switchRow(s1, "Auto Equip Best", "Pasang hewan terbaik otomatis tiap 30 detik", "AutoEquip", function(on)
-        if on then startLoop("AutoEquip", "Plot_EquipBest", EQUIP_EVERY, "Equip Best") end
-    end)
-
-    local s2 = section(petPage, "equip best sekarang pet")
-    buttonRow(s2, "Equip Best Sekarang", "Pasang hewan terbaik sekali", function()
-        task.spawn(callOnce, "Plot_EquipBest", "Equip Best")
-    end)
-
-    local s3 = section(petPage, "auto upgrade plot kandang fence")
-    switchRow(s3, "Auto Upgrade Plot", "Upgrade plot (kapasitas kandang) tiap 10 detik (uang harus cukup)", "AutoFence", function(on)
-        if on then startLoop("AutoFence", "Plot_UpgradeFence", UPGRADE_EVERY, "Upgrade Plot") end
-    end)
-end
-
--- MISC (config paling atas)
-do
-    local s1 = section(miscPage, "save config simpan")
-    buttonRow(s1, "Save Config", "Simpan status semua switch ke file", saveConfig)
-
-    local s2 = section(miscPage, "load config muat")
-    buttonRow(s2, "Load Config", "Muat status switch dari file config", function() loadConfig() end)
-
-    local s3 = section(miscPage, "auto load config")
-    switchRow(s3, "Auto Load Config", "Muat config otomatis setiap script dijalankan", "AutoLoad", setAutoLoad)
-
-    local s4 = section(miscPage, "anti afk")
-    switchRow(s4, "Anti AFK", "Cegah kena kick karena diam terlalu lama", "AntiAfk", setAntiAfk)
-
-    local s5 = section(miscPage, "auto execute")
-    switchRow(s5, "Auto Execute", "Jalankan script lagi otomatis setelah pindah server", "AutoExec", setAutoExec)
-
-    local s6 = section(miscPage, "pulihkan tampilan karakter")
-    buttonRow(s6, "Pulihkan Tampilan", "Balikin karakter yang invisible (matikan Auto Throw dulu)", function()
-        restoreLook()
-        setStatus("Tampilan dipulihkan", C_GOOD)
-    end)
-
-    local s7 = section(miscPage, "reset statistik")
-    buttonRow(s7, "Reset Statistik", "Nolkan hitungan tap", function()
-        taps, extra, lastId = 0, 0, 0
-        updateStats()
-    end)
-end
-
--- ===== TUTUP =====
-closeBtn.MouseButton1Click:Connect(function() dlg.Visible = true end)
-noBtn.MouseButton1Click:Connect(function() dlg.Visible = false end)
-yesBtn.MouseButton1Click:Connect(function()
-    local wasTrain = State.AutoTrain
-    local wasThrow = State.AutoThrow
-    for k in pairs(State) do State[k] = false end
-    getgenv().__ThrowToken = (getgenv().__ThrowToken or 0) + 1
-    if getgenv().__TapConn then pcall(function() getgenv().__TapConn:Disconnect() end) end
-    if getgenv().__AfkConn then pcall(function() getgenv().__AfkConn:Disconnect() end) end
-    if getgenv().__TpConn then pcall(function() getgenv().__TpConn:Disconnect() end) end
-    for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
-    if wasTrain then task.spawn(function() task.wait(1.2); stopTraining() end) end
-    if wasThrow then task.spawn(function() task.wait(1.5); restoreLook() end) end
-    gui:Destroy()
-end)
-
--- ===== MULAI =====
-setAntiAfk(State.AntiAfk)
-setAutoExec(State.AutoExec)
-setTab("Main")
-
-local auto = getgenv().ThrowAutoStart
-getgenv().ThrowAutoStart = nil
-
-if auto then
-    -- lanjutan setelah pindah server (Auto Execute): pakai kondisi terakhir
-    task.spawn(function()
-        task.wait(4)
-        for _, k in ipairs(auto) do
-            if State[k] == false then
-                State[k] = true
-                if switchRefresh[k] then switchRefresh[k](false) end
-                if switchHandlers[k] then switchHandlers[k](true) end
-            end
-        end
-    end)
-elseif State.AutoLoad then
-    task.spawn(function()
-        task.wait(2)
-        loadConfig()
-    end)
-end
+    lbl.Position = UDim2
