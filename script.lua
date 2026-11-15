@@ -23,7 +23,7 @@ end
 
 -- ===== SETTING =====
 local SCRIPT_BASE = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/"
-local SCRIPT_FILES = { "throw-2.lua", "throw.lua" } -- dicoba berurutan sampai ada yang berhasil diunduh
+local SCRIPT_FILES = { "script.lua", "throw.lua" } -- dicoba berurutan sampai ada yang berhasil diunduh
 local ICON_URL = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/icon/icon.png"
 local ICON_FILE = "tfa_icon.png"
 local CONFIG_FILE = "ThrowForAnimals_configs.json"
