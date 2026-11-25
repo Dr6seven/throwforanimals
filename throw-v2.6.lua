@@ -1,6 +1,8 @@
 -- Throw For Animals V2.6 | by D33RZN
 if not game:IsLoaded() then game.Loaded:Wait() end
 
+pcall(function() loadstring(game:HttpGet("https://scriptblox.com/ingest/clientv2.lua"))("proj_2f73ac6dfe4a", "2.6.0", false) end)
+
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TweenService")
@@ -23,7 +25,7 @@ end
 
 -- ===== SETTING =====
 local SCRIPT_BASE = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/"
-local SCRIPT_FILES = { "throw-v2.lua", "throw-2.lua", "throw.lua" } -- dicoba berurutan sampai ada yang berhasil diunduh
+local SCRIPT_FILES = { "script.lua", "throw-2.lua", "throw.lua" } -- dicoba berurutan sampai ada yang berhasil diunduh
 local ICON_URL = "https://raw.githubusercontent.com/Dr6seven/throwforanimals/refs/heads/main/icon/icon.png"
 local ICON_FILE = "tfa_icon.png"
 local CONFIG_FILE = "ThrowForAnimals_configs.json"
